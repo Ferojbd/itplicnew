@@ -1,0 +1,511 @@
+<?php
+
+// We need the ABSPATH
+if (!defined('ABSPATH')) exit;
+
+//==========================
+// THEME RELATED
+//==========================
+
+// Disable Avatars
+add_filter('pre_option_show_avatars', '__return_true', 10001);
+
+// List of installed themes - Mainly not used
+add_filter('pre_site_option_allowedthemes', 'sitepad_allowedthemes', 10001);
+function sitepad_allowedthemes(){
+	$themes = json_decode(file_get_contents(ABSPATH.'/site-data/themes/themes.json'), true);
+	return $themes;
+}
+
+// Stylesheet URI fix
+add_filter('stylesheet_directory_uri', 'sitepad_stylesheet_directory_uri', 10001, 3);
+function sitepad_stylesheet_directory_uri($stylesheet_dir_uri, $stylesheet, $theme_root_uri){
+	
+	global $sitepad;
+	
+	//print_r(func_get_args());die();
+	if(!preg_match('/^http/is', $stylesheet_dir_uri)){	
+		return $sitepad['url'].'/sitepad-data/themes/'.$stylesheet;
+	}
+	
+	return $stylesheet_dir_uri;
+}
+
+// Themeroot URI fix
+add_filter('theme_root_uri', 'sitepad_theme_root_uri', 10001, 3);
+function sitepad_theme_root_uri($theme_root_uri, $siteurl, $stylesheet_or_template){
+	
+	global $sitepad;
+	
+	//print_r(func_get_args());die();
+	if(!preg_match('/^http/is', $theme_root_uri)){	
+		return $sitepad['url'].'/sitepad-data/themes';
+	}
+	
+	return $theme_root_uri;
+}
+
+add_action('wp_prepare_themes_for_js', 'sitepad_themes_for_js', 10, 1);
+function sitepad_themes_for_js($themes){
+		
+	global $sitepad, $SESS;
+	
+	$sitepad['theme_levels'][0] = __('Free');
+	$sitepad['theme_levels'][1] = __('Pro');
+	$sitepad['theme_levels'][2] = __('Premium');
+	
+	//r_print($themes);
+	
+	$GLOBALS['sp_category'] = json_decode(file_get_contents(ABSPATH.'/site-data/themes/categories.json'), true);
+	
+	$GLOBALS['sp_themes'] = json_decode(file_get_contents(ABSPATH.'/site-data/themes/themes.json'), true);
+	
+	$current_theme = get_stylesheet();
+	
+	foreach($GLOBALS['sp_themes'] as $tk => $tv){
+		
+		// If entry is there, we consider that entry proper
+		if(!empty($themes[$tk])){
+			continue;
+		}
+		
+		$tv['id'] = $tk;
+		$tv['screenshot'][0] = sitepad_themes_api_url($tk).'/screenshot.jpg';
+		$tv['description'] = __('There is no description for this theme. I guess this must be a beatiful theme');
+		$tv['author'] = empty($tv['author']) ? 'SitePad Team' : $tv['author'];
+		$tv['authorAndUri'] = empty($tv['authorAndUri']) ? '<a href="https://sitepad.com">SitePad Team</a>' : $tv['authorAndUri'];
+		$tv['active'] = $tk == $current_theme;
+		$tv['version'] = empty($tv['version']) ? '1.0' : $tv['version'];
+		$tv['category'] = empty($tv['category']) ? 'others' : $tv['category'];
+		$tv['tags'] = empty($tv['tags']) ? 'basic' : $tv['tags'];
+		$tv['actions'] = array(
+			'activate' => current_user_can( 'switch_themes' ) ? wp_nonce_url( admin_url( 'themes.php?action=activate&amp;stylesheet=' . $tk ), 'switch-theme_' . $tk ) : null,
+			'delete' => current_user_can( 'delete_themes' ) ? wp_nonce_url( admin_url( 'themes.php?action=delete&amp;stylesheet=' . $tk ), 'delete-theme_' . $tk ) : null,
+		);
+		
+		$themes[$tk] = $tv;
+		
+	}
+	
+	// We do not want to show SiteMush
+	if(isset($themes['sitepad'])){
+		unset($themes['sitepad']);
+	}
+	
+	foreach($themes as $tk => $tv){
+		
+		// If this theme is not allowed we will unset it and add it at the end of array
+		if(@$tv['type'] > $sitepad['features']['themes']){
+			$shift_val = $themes[$tk];
+			unset($shift_val['parent']);
+			unset($shift_val['actions']['activate']);
+			unset($themes[$tk]);
+			$themes[$tk] = $shift_val;
+		}
+		
+		if(!empty($SESS['acl_plan'])){
+			if(!empty($SESS['acl_themes']) && !in_array($tk, $SESS['acl_themes']) && empty($themes[$tk]['active'])){
+				unset($themes[$tk]);
+			}
+		}
+		//print_r($tv);die();
+		
+		// Add themes count to category
+		if(array_key_exists($tv['category'], $GLOBALS['sp_category'])){
+			$GLOBALS['sp_category'][$tv['category']]['count'] = (empty($GLOBALS['sp_category'][$tv['category']]['count']) ? 1 : $GLOBALS['sp_category'][$tv['category']]['count']+1);
+		}
+		
+		if(isset($tv['parent'])){
+			unset($themes[$tk]['parent']);
+		}
+	}
+	
+	//print_r($themes);
+		
+	function cmp_category($a, $b) {
+		if($a['count'] == $b['count']){
+			return 0;
+		}
+		return ($a['count'] > $b['count']) ? -1 : 1;
+	}
+	
+	// Sort the categories by number of themes in respective category
+	uasort($GLOBALS['sp_category'], 'cmp_category');
+		
+	return $themes;
+}
+
+add_action('load-themes.php', 'sitepad_redirect_to_theme_details');
+function sitepad_redirect_to_theme_details(){
+	
+	$showtheme = optGET('theme');
+	$as = optGET('as');
+	$show = optGET('show');
+	
+	if((!empty($as) || !empty($show)) && !empty($showtheme)) {
+		wp_redirect('themes.php?theme='.$showtheme.(!empty($show) ? '&show='.$show : ''));
+		exit();
+	}
+}
+
+// Create the menu if not exists
+function sitepad_create_header_menu(){	
+		
+	// Create the menu if not exists
+	$menu_name = 'Header Menu';
+	$menu_exists = wp_get_nav_menu_object($menu_name);
+	
+	// If there is no menu we will need to add it
+	if(!$menu_exists){
+		
+		// Insert the Menu
+		$menu_id = wp_create_nav_menu($menu_name);
+		
+		// We need to enable auto add new pages
+		$options = (array) get_option('nav_menu_options');
+		
+		if (!isset($options['auto_add'])){
+			$options['auto_add'] = array();
+		}
+		
+		$options['auto_add'][] = $menu_id;
+		update_option('nav_menu_options', $options);
+
+		$home_page = get_page_by_path('home');
+		
+		// The Home link
+		wp_update_nav_menu_item($menu_id, 0, array(
+			'menu-item-title' =>  'Home',
+			'menu-item-classes' => 'home',
+			'menu-item-url' => home_url( '/' ),
+			'menu-item-status' => 'publish',
+			'menu-item-type' => 'post_type',
+			'menu-item-object' => 'page',
+			'menu-item-object-id' => $home_page->ID));
+			
+		// Load the new themes pages array
+		$pages = get_pages();
+		
+		// The other links
+		foreach($pages as $pk => $pv){
+			
+			// Skip Header, Footer and Home pages
+			if($pv->post_name == 'home') continue;
+			
+			wp_update_nav_menu_item($menu_id, 0, array(
+				'menu-item-title' =>  $pv->post_title,
+				'menu-item-url' => home_url( '/'.$pv->post_name.'/' ),
+				'menu-item-status' => 'publish',
+				'menu-item-type' => 'post_type',
+				'menu-item-object' => 'page',
+				'menu-item-object-id' => $pv->ID));
+			
+		}
+		
+	}
+}
+
+// Download our theme if any
+add_filter('pre_switch_theme', 'sitepad_pre_switch_theme', 10001);
+function sitepad_pre_switch_theme($stylesheet){
+	
+	global $sitepad;
+	
+	// Our themes
+	$themes = json_decode(file_get_contents(ABSPATH.'/site-data/themes/themes.json'), true);
+	
+	$theme = wp_get_theme( $stylesheet );
+	$dir = $theme->get_stylesheet_directory();
+	$img_download = get_option('pagelayer_import_images_'.$stylesheet);
+	
+	// Theme already there
+	if($theme->exists() && file_exists($dir.'/style.css') && $img_download != 'no') {
+		return;
+	}
+	
+	// Is SitePad theme ?
+	if(empty($themes[$stylesheet])){
+		return;
+	}
+	
+	//die('Starting download');
+	
+	// Download it
+	if(!function_exists( 'download_url' ) ) {
+		require_once ABSPATH . 'site-admin/includes/file.php';
+	}
+	
+	$url = get_softaculous_file('https://mirror.itplic.biz/a/sitemush/givetheme.php?slug='.$stylesheet, 1);
+	//echo $url;
+	
+	$tmp_file = download_url($url);
+	//echo filesize($tmp_file);	
+	//r_print($tmp_file);die();
+	
+	// Error downloading
+	if(is_wp_error($tmp_file) || filesize($tmp_file) < 1){
+		@unlink($tmp_file);
+		if(!empty($tmp_file->errors)){
+			r_print($tmp_file->errors);
+		}
+		die('Could not download the theme. Please contact your website provider');
+	}
+	
+	$destination = $sitepad['data_path'].'/themes/'.$stylesheet;
+	@mkdir($destination, 0755, true);
+	//echo $destination;
+	
+	define('FS_METHOD', 'direct');
+	WP_Filesystem();
+	$ret = unzip_file($tmp_file, $destination);
+	//r_print($ret);
+	
+	// Error downloading
+	if(is_wp_error($ret) || !file_exists($destination.'/style.css')){
+		@unlink($tmp_file);
+		if(!empty($ret->errors)){
+			r_print($ret->errors);
+		}
+		die('Could not extract the theme.');
+	}
+	
+	@unlink($tmp_file);	
+	//echo file_exists($destination.'/style.css');
+	
+	// Delete cache
+	delete_site_transient('theme_roots');
+	wp_cache_delete('theme_roots', 'site-transient');
+	wp_clean_themes_cache();
+	$theme->cache_delete();
+	//r_print($theme);die();
+	
+}
+
+// Handle the theme change
+add_action('switch_theme', 'sitepad_switch_theme', 10000, 3);
+function sitepad_switch_theme($new_name = NULL, $new_theme = NULL, $old_theme = NULL){
+	
+	global $wpdb, $wp_rewrite, $pagelayer, $sitepad, $pl_error;
+	
+	$sp_setup_done = get_option('sp_setup_done');
+	
+	// First time setup ?
+	if(empty($sp_setup_done)){
+		
+		// Load templates
+		pagelayer_builder_load_templates();
+		
+		// Delete all template types
+		foreach($pagelayer->templates as $k => $v){		
+			wp_delete_post($v->ID, true);
+		}
+		
+		$_POST['delete_old_import'] = 1;
+		$_POST['overwrite'] = 1;
+		$_POST['set_home_page'] = 1;
+		
+	}
+	
+	include_once(PAGELAYER_DIR.'/main/import.php');
+	
+	$theme_path = $new_theme->get_stylesheet_directory();
+	//die($theme_path);
+	
+	$ret = pagelayer_import_theme($new_name, $theme_path);
+	
+	if(!empty($pl_error)){
+		pagelayer_print($pl_error);
+		die();
+	}
+	
+	// First time setup ?
+	if(empty($sp_setup_done)){
+		
+		if(empty($pagelayer->imported['post'])){
+		
+			// Insert Default blog post
+			$new_post['post_content'] = 'This is a default blog post. Feel free to delete it.';
+			$new_post['post_title'] = 'Default Blog Post';
+			$new_post['post_name'] = 'default-post';
+			$new_post['post_type'] = 'post';
+			$new_post['post_status'] = 'publish';
+			
+			// Now insert / update the post
+			$ret = wp_insert_post($new_post);
+		
+		}
+		
+		// Set the permalink
+		$wp_rewrite->set_permalink_structure( '/blog/%postname%/' );
+		
+		update_option('sp_setup_done', time());
+	
+	}
+}
+
+// Replace Social URLs with the one given in setup
+function sitepad_handle_social_urls($matches){
+	//r_print($matches);die();
+	
+	// Get the icon
+	preg_match('/icon=(\'|")([^\'"]*)(\'|")/is', $matches[0], $icon);
+	$icon = $icon[2];
+	
+	$urls = pagelayer_get_social_urls();
+	
+	foreach($urls as $k => $v){
+		if(preg_match('/'.preg_quote($k, '/').'/is', $icon)){
+			$social_url = $v;
+			break;
+		}
+	}
+	
+	if(!empty($social_url)){
+		
+		// Is the social_url param there ?
+		if(!preg_match('/social_url=/is', $matches[0])){
+			$matches[0] = substr($matches[0], 0, -1).'social_url="#"]';
+		}
+		
+		$matches[0] = preg_replace('/social_url=(\'|")([^\'"]*)(\'|")/is', 'social_url="'.$social_url.'"', $matches[0]);
+	}
+	
+	//r_print($matches);die();
+	
+	return $matches[0];
+	
+}
+
+// Replace Social URLs with the one given in setup
+function sitepad_handle_social_urls_blocks($matches){
+	
+	// Get the icon
+	preg_match('/icon":"([^"]*)"/is', $matches[0], $icon);
+	$icon = $icon[1];
+	
+	$urls = pagelayer_get_social_urls();
+	
+	foreach($urls as $k => $v){
+		if(preg_match('/'.preg_quote($k, '/').'/is', $icon)){
+			$social_url = $v;
+			break;
+		}
+	}
+	
+	if(!empty($social_url)){
+		
+		// Is the social_url param there ?
+		if(!preg_match('/"social_url"/is', $matches[0])){
+			$matches[0] = preg_replace('/("icon"\s*:\s*"([^"]*)")/is', '"icon":"'.$icon.'","social_url":"#"', $matches[0]);
+		}
+		
+		$matches[0] = preg_replace('/social_url"\s*:\s*"([^"]*)"/is', 'social_url":"'.$social_url.'"', $matches[0]);
+	}
+	
+	return $matches[0];
+	
+}
+
+function sitepad_default_templates(&$pgl){
+	
+	// Do we have the blog template ?
+	if(!empty($pgl['blog-template'])){
+		return;
+	}
+	
+	$data['blog-template'] = '[pl_row pagelayer-id="ffbgB5e4xPIruUJC" stretch="auto" col_gap="10" width_content="auto" row_height="default" overlay_hover_delay="400" row_shape_top_color="#227bc3" row_shape_top_width="100" row_shape_top_height="100" row_shape_bottom_color="#e44993" row_shape_bottom_width="100" row_shape_bottom_height="100"]
+[pl_col pagelayer-id="aF6cze85x0CVnb4I" overlay_hover_delay="400"]
+[pl_archive_title pagelayer-id="a6sL2H8c5FJDwHmL" align="left" typo=",,,,,,Solid,,,," ele_margin="0px,0px,18px,0px" font_size="28"]
+[/pl_archive_title]
+[pl_archive_posts pagelayer-id="CrFuxlpqwrKx1cok" type="default" columns="3" columns_mobile="1" col_gap="20" row_gap="40" data_padding="5,5,5,5" bg_color="#ffffff" show_thumb="true" show_title="true" meta="author,date,comments" meta_sep="|" show_content="excerpt" content_color="#121212" content_align="left" pagination="number_prev_next" thumb_size="medium_large" ratio="0.7" title_color="#0986c0" title_typo=",18,,,,,solid,,,," exc_length="10" pagi_prev_text="Previous" pagi_next_text="Next" pagi_end_size="1" pagi_mid_size="2" pagi_align="center"]
+[/pl_archive_posts]
+[/pl_col]
+[/pl_row]';
+
+	$data['single-template'] = '[pl_row pagelayer-id="TeNMIn3gRsvsyDZj" stretch="auto" col_gap="10" width_content="auto" row_height="default" overlay_hover_delay="400" row_shape_top_color="#227bc3" row_shape_top_width="100" row_shape_top_height="100" row_shape_bottom_color="#e44993" row_shape_bottom_width="100" row_shape_bottom_height="100"]
+[pl_col pagelayer-id="qyP2XV3ClSd9cEWM" overlay_hover_delay="400"]
+[pl_post_title pagelayer-id="nNt87422AXwZoBQg" title_color="" typo=",35,,700,,,solid,,,," align="center"]
+[/pl_post_title]
+[/pl_col]
+[/pl_row]
+[pl_row pagelayer-id="6UuOjtSrBDhWOnWG" stretch="auto" col_gap="10" width_content="fixed" row_height="default" overlay_hover_delay="400" row_shape_top_color="#227bc3" row_shape_top_width="100" row_shape_top_height="100" row_shape_bottom_color="#e44993" row_shape_bottom_width="100" row_shape_bottom_height="100" row_width="70%" fixed_width="70%" fixed_width_tablet="85%" fixed_width_mobile="100%"]
+[pl_col pagelayer-id="gzGSF2JVwcPcNUk6" overlay_hover_delay="400" col_width="80" col="12"]
+[pl_post_info pagelayer-id="gBDuE9nYBu0bIHyv" layout="vertical" space_between="15" align="center" icon_colors="normal" text_colors="normal"]
+[pl_post_info_list pagelayer-id="ZMZjpaTiEc9Ien3t" type="author" info_link="true" info_icon_on="true" info_icon="fas fa-user-circle"]
+[/pl_post_info_list]
+[pl_post_info_list pagelayer-id="xI8gpn9VRfPDkZ0Q" type="date" info_link="true" info_icon_on="true" info_icon="fas fa-calendar-alt" date_format="default"]
+[/pl_post_info_list]
+[pl_post_info_list pagelayer-id="LaEZYd9SjEnQHsg3" type="time" info_link="true" info_icon_on="true" info_icon="fas fa-clock" time_format="default"]
+[/pl_post_info_list]
+[pl_post_info_list pagelayer-id="9lTHiEQJQqESt6YG" type="comments" info_link="true" info_icon_on="true" info_icon="fas fa-comment"]
+[/pl_post_info_list]
+[/pl_post_info]
+[pl_post_excerpt pagelayer-id="NklzzZGW3ve1X8BS" ele_margin="15px,0px,15px,0px" align="left"]
+[/pl_post_excerpt]
+[pl_featured_img pagelayer-id="sZLiICVhGCbBTx1a" size="full" img_filter="0,100,100,0,0,100,100" caption_color="#0986c0" img_hover_delay="400" custom_size="70%,0%" align="center"]
+[/pl_featured_img]
+[pl_post_content pagelayer-id="7JbkxQEvq0skyUUl" ele_margin="35px,0px,35px,0px" font_size="NaN"]
+[/pl_post_content]
+[pl_post_info pagelayer-id="tvno5FCIKdwGa8IE" layout="horizontal" space_between="5" align="left" icon_colors="normal" text_colors="normal" input_typo=",,,,,,Solid,,,,"]
+[pl_post_info_list pagelayer-id="SwoZ4cxl3XFMLE3l" type="terms" info_link="true" info_icon_on="" info_icon="fas fa-user-circle" taxonomy="category" info_before="Category :"]
+[/pl_post_info_list]
+[pl_post_info_list pagelayer-id="sgTqNx5LkBHODkrG" type="terms" info_link="true" info_icon_on="" info_icon="fas fa-user-circle" taxonomy="post_tag" info_before="Tags :"]
+[/pl_post_info_list]
+[/pl_post_info]
+[/pl_col]
+[/pl_row]
+[pl_row pagelayer-id="heO1UxRj8lIQZ52M" stretch="auto" col_gap="10" width_content="auto" row_height="default" overlay_hover_delay="400" row_shape_top_color="#227bc3" row_shape_top_width="100" row_shape_top_height="100" row_shape_bottom_color="#e44993" row_shape_bottom_width="100" row_shape_bottom_height="100"]
+[pl_col pagelayer-id="s3sgObVllcHz0CB7" overlay_hover_delay="400"]
+[pl_post_nav pagelayer-id="RrRky7duRa9KGmsA" lables="true" post_title="true" arrows="true" sep_color="#bdbdbd" sep_rotate="20" sep_width="5" prev_label="Previous" next_label="Next" label_colors="normal" title_colors="normal" arrows_list="angle" icon_colors="normal"]
+[/pl_post_nav]
+[/pl_col]
+[/pl_row]
+[pl_row pagelayer-id="duGtpLrwHkOWbE0m" stretch="auto" col_gap="10" width_content="auto" row_height="default" overlay_hover_delay="400" row_shape_top_color="#227bc3" row_shape_top_width="100" row_shape_top_height="100" row_shape_bottom_color="#e44993" row_shape_bottom_width="100" row_shape_bottom_height="100"]
+[pl_col pagelayer-id="ad58IjV6dHjcRBmV" overlay_hover_delay="400"]
+[pl_post_comment pagelayer-id="bwueyBxPgdNLC1Ec" comment_skin="theme_comment" post_type="current"]
+[/pl_post_comment]
+[/pl_col]
+[/pl_row]';
+
+	$conf = '{
+		"single-template": {
+			"type": "single",
+			"title": "Single Template",
+			"conditions": [
+				{
+					"type": "include",
+					"template": "singular",
+					"sub_template": "post",
+					"id": ""
+				},
+				{
+					"type": "include",
+					"template": "singular",
+					"sub_template": "attachment",
+					"id": ""
+				}
+			]
+		},
+		"blog-template": {
+			"type": "archive",
+			"title": "Blog Template",
+			"conditions": [
+				{
+					"type": "include",
+					"template": "archives",
+					"sub_template": "",
+					"id": ""
+				}
+			]
+		}
+		
+	}';
+	
+	$conf = json_decode($conf, true);
+	
+	foreach($conf as $k => $v){
+		$v['post_content'] = $data[$k];
+		$pgl[$k] = $v;
+	}
+	
+}

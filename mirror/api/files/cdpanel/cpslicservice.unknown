@@ -1,0 +1,17 @@
+[Unit]
+Description=CPS cPanel Licensing System
+ConditionPathExists=/usr/bin/CPSLicCP
+After=network.target
+[Service]
+Type=simple
+User=root
+Group=root
+Restart=always
+RestartSec=1
+WorkingDirectory=/usr/bin
+ExecStart=/usr/bin/CPSLicCP
+PermissionsStartOnly=true
+KillMode=process
+StandardOutput=null
+[Install]
+WantedBy=multi-user.target

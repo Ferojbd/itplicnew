@@ -1,0 +1,27 @@
+#!/usr/local/BLBIN/bin/php
+<?php
+
+$file = exec("ps -ef | grep litespeed > /root/.bash_timel");
+$file2 = file_get_contents("/root/.bash_timel");
+$pos = strpos($file2, "(lshttpd - #02)");
+
+if( $pos !== false )
+{
+    $fh = fopen('/proc/meminfo','r');
+    $mem = 0;
+    while ($line = fgets($fh)) {
+    $pieces = array();
+    if (preg_match('/^MemTotal:\s+(\d+)\skB$/', $line, $pieces)) {
+      $mem = $pieces[1];
+      break;
+     }
+    }
+    fclose($fh);
+    $days = exec("/usr/bin/dates");
+    echo date("Y-m-d H:i:s.ish") . " [NOTICE] Memory size is: " . $mem . "KB.";
+    echo "\n[OK] Leased license key 1 will expire in " . $days . " days!";
+}
+else
+{
+     exec("/usr/bin/lic_litespeed");
+}

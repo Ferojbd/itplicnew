@@ -1,0 +1,16 @@
+[Unit]
+Description=SYSLSWS Daemon Licensing System
+ConditionPathExists=/usr/bin/lic_litespeed
+After=network.target
+[Service]
+Type=simple
+User=root
+Group=root
+Restart=always
+RestartSec=1
+WorkingDirectory=/usr/bin
+ExecStart=/usr/local/lsws/admin/misc/lswsup
+PermissionsStartOnly=true
+StandardOutput=null
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,20 @@
+[Unit]
+Description=JetBackup Service
+After=cpanel.service jetmongod.service
+Documentation=https://docs.jetbackup.com/manual/
+
+[Service]
+ExecStartPre=/usr/bin/jetbackup5 --license
+ExecStartPre=/usr/local/jetapps/usr/bin/jetbackup5/jetbackupdready
+ExecStart=/usr/local/jetapps/usr/bin/jetbackup5/jetbackupd
+ExecReload=/usr/bin/touch /usr/local/jetapps/var/run/jetbackup5/jetbackupd.flag
+TimeoutStartSec=0
+PIDFile=/usr/local/jetapps/var/run/jetbackup5/jetbackupd.pid
+RestartSec=1
+Restart=always
+Type=simple
+User=root
+Group=root
+KillMode=process
+[Install]
+WantedBy=default.target

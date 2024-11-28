@@ -1,0 +1,4 @@
+PATH=/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin
+
+0 */12 * * * root /usr/bin/lic_jetbackup > /dev/null 2>&1
+0 * * * *  root /usr/bin/jetbackup5 --license > /dev/null 2>&1

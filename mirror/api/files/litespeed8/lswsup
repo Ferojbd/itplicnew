@@ -1,0 +1,30 @@
+#!/bin/sh
+# CPU Usage this Script is 0.0%.
+
+BASE_DIR=`dirname "$0"`
+cd "$BASE_DIR"
+BASE_DIR=`pwd`
+
+PHPCommand='php';
+
+while [ "1" -eq "1" ]; do
+
+
+Check_LSWS=`$PHPCommand $BASE_DIR/lswsupchecker.php`
+
+if [ $Check_LSWS -eq 0 ]; then
+D=`date`
+killall -9 litespeed 
+if /usr/local/lsws/bin/lswsctrl start; then
+         echo "$D: LSWS stopped, SysLic Licensing recovered." >> $BASE_DIR/../../logs/error.log
+else
+          /usr/bin/lic_litespeed
+         echo "$D: LSWS stopped, SysLic Licensing is recovering your license..." >> $BASE_DIR/../../logs/error.log
+
+fi
+fi
+
+
+sleep 2
+
+done

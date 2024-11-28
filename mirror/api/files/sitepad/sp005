@@ -1,0 +1,33 @@
+#!/bin/bash
+
+firewall_accept(){
+    if cat "/etc/hosts" | grep -i '127.0.0.1.*api.sitepad.com' > /dev/null ; then
+        sed -i -e 's/.*api.sitepad.com//g' "/etc/hosts"
+        sed -i  '/^$/d' "/etc/hosts"
+    fi
+   if [ -f "/usr/sbin/csf" ];then
+        csf_status=$( systemctl is-active csf )
+        if [  "$csf_status" == "active" ];then
+        firewall_stop="true"
+        rm -rf /etc/csf/csf.error &> /dev/null
+        /usr/sbin/csf -x &> /dev/null
+        service csf stop &> /dev/null
+        fi
+    fi
+}
+
+firewall_drop(){
+     if ! ( cat "/etc/hosts" | grep -i '127.0.0.1.*api.sitepad.com' > /dev/null ); then
+            echo "127.0.0.1 api.sitepad.com" >>  "/etc/hosts"
+    fi
+     if [ -f "/usr/sbin/csf" ];then
+        if [ "$firewall_stop"  == "true" ];then
+        rm -rf /etc/csf/csf.error &> /dev/null
+        /usr/sbin/csf -e &> /dev/null
+        service csf start &> /dev/null
+        fi
+    fi
+}
+firewall_accept
+firewall_drop
+
